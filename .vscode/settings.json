@@ -61,6 +61,10 @@
         "xhash": "cpp",
         "thread": "cpp",
         "ratio": "cpp",
-        "stop_token": "cpp"
+        "stop_token": "cpp",
+        "chrono": "cpp",
+        "forward_list": "cpp",
+        "iomanip": "cpp",
+        "sstream": "cpp"
     }
 }

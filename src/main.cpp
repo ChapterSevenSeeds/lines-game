@@ -1,3 +1,4 @@
+#include "timer.hpp"
 #include <iostream>
 #include <ranges>
 #include <unordered_set>
@@ -5,10 +6,15 @@
 #include <algorithm>
 #include <iostream>
 #include <format>
+#include <chrono>
+#include <vector>
+#include <limits>
 #include "hash_combine.hpp"
 
-constexpr auto ROWS = 2;
-constexpr auto COLUMNS = 2;
+using namespace std::chrono_literals;
+
+constexpr auto ROWS = 15;
+constexpr auto COLUMNS = 20;
 
 class Point
 {
@@ -110,15 +116,23 @@ struct Move
     Move(uint32_t row, uint32_t column, Side side) : row(row), column(column), side(side) {}
 };
 
+bool is_out_of_time(std::chrono::steady_clock::time_point &start, std::chrono::seconds max_time)
+{
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::seconds>(end - start);
+    return duration >= max_time;
+}
+
 class Board
 {
     std::vector<std::vector<Square>> squares;
     uint32_t rows, columns;
+    int32_t player_points, opponent_points;
 
 public:
     Board(uint32_t rows, uint32_t columns) : rows(rows), columns(columns)
     {
-        squares = std::vector<std::vector<Square>>(rows, std::vector<Square>(columns, {}));
+        squares = std::vector<std::vector<Square>>(rows, std::vector<Square>(columns));
 
         for (uint32_t row : std::ranges::iota_view{0u, rows})
         {
@@ -129,43 +143,91 @@ public:
         }
     }
 
+    void increment_score_if_applicable(uint32_t row, uint32_t column, std::optional<Player> previously_filled_by)
+    {
+        if (!squares[row][column].is_full() && previously_filled_by.has_value())
+        {
+            switch (previously_filled_by.value())
+            {
+            case Player::Player:
+                --player_points;
+                break;
+            case Player::Opponent:
+                --opponent_points;
+                break;
+            default:
+                break;
+            }
+        }
+        else if (squares[row][column].is_full())
+        {
+            switch (squares[row][column].filled_by.value())
+            {
+            case Player::Player:
+                ++player_points;
+                break;
+            case Player::Opponent:
+                ++opponent_points;
+                break;
+            default:
+                break;
+            }
+        }
+    }
+
     void fill_top(uint32_t row, uint32_t column, SideState player)
     {
+        auto previously_filled_by = squares[row][column].filled_by;
         squares[row][column].set_top(player);
+        increment_score_if_applicable(row, column, previously_filled_by);
 
         if (row > 0)
         {
+            previously_filled_by = squares[row - 1][column].filled_by;
             squares[row - 1][column].set_bottom(player);
+            increment_score_if_applicable(row - 1, column, previously_filled_by);
         }
     }
 
     void fill_left(uint32_t row, uint32_t column, SideState player)
     {
+        auto previously_filled_by = squares[row][column].filled_by;
         squares[row][column].set_left(player);
+        increment_score_if_applicable(row, column, previously_filled_by);
 
         if (column > 0)
         {
+            previously_filled_by = squares[row][column - 1].filled_by;
             squares[row][column - 1].set_right(player);
+            increment_score_if_applicable(row, column - 1, previously_filled_by);
         }
     }
 
     void fill_right(uint32_t row, uint32_t column, SideState player)
     {
+        auto previously_filled_by = squares[row][column].filled_by;
         squares[row][column].set_right(player);
+        increment_score_if_applicable(row, column, previously_filled_by);
 
         if (column < columns - 1)
         {
+            previously_filled_by = squares[row][column + 1].filled_by;
             squares[row][column + 1].set_left(player);
+            increment_score_if_applicable(row, column + 1, previously_filled_by);
         }
     }
 
     void fill_bottom(uint32_t row, uint32_t column, SideState player)
     {
+        auto previously_filled_by = squares[row][column].filled_by;
         squares[row][column].set_bottom(player);
+        increment_score_if_applicable(row, column, previously_filled_by);
 
         if (row < rows - 1)
         {
+            previously_filled_by = squares[row + 1][column].filled_by;
             squares[row + 1][column].set_top(player);
+            increment_score_if_applicable(row + 1, column, previously_filled_by);
         }
     }
 
@@ -218,22 +280,22 @@ public:
 
                 if (square.top == SideState::Empty)
                 {
-                    moves.push_back(Move(row, column, Side::Top));
+                    moves.emplace_back(row, column, Side::Top);
                 }
 
                 if (square.left == SideState::Empty)
                 {
-                    moves.push_back(Move(row, column, Side::Left));
+                    moves.emplace_back(row, column, Side::Left);
                 }
 
                 if (square.right == SideState::Empty)
                 {
-                    moves.push_back(Move(row, column, Side::Right));
+                    moves.emplace_back(row, column, Side::Right);
                 }
 
                 if (square.bottom == SideState::Empty)
                 {
-                    moves.push_back(Move(row, column, Side::Bottom));
+                    moves.emplace_back(row, column, Side::Bottom);
                 }
             }
         }
@@ -241,34 +303,88 @@ public:
         return moves;
     }
 
-    void go(Player turn, uint32_t &total_moves)
+    int32_t search(Player turn, uint32_t &total_moves, uint32_t max_depth, uint32_t current_depth, Timer &timer)
     {
+        if (current_depth == max_depth)
+        {
+            return player_points - opponent_points;
+        }
+
         auto all_moves = get_moves();
 
+        int32_t current_score = turn == Player::Player ? std::numeric_limits<int32_t>::min() : std::numeric_limits<int32_t>::max();
         for (auto &move : all_moves)
         {
+            if (timer.has_elapsed())
+            {
+                return current_score;
+            }
+
             apply_move(move, turn);
-            go(opposite(turn), ++total_moves);
+
+            auto new_score = search(opposite(turn), ++total_moves, max_depth, current_depth + 1, timer);
+            if ((turn == Player::Player && new_score > current_score) || (turn == Player::Opponent && new_score < current_score))
+            {
+                current_score = new_score;
+            }
+
             undo_move(move);
         }
+
+        return current_score;
     }
 };
 
 struct ThreadData
 {
     Board board;
-    Move initial_move;
+    std::vector<Move> initial_moves;
     uint32_t total_move_count = 0;
     std::thread thread;
+    Timer &timer;
+    int32_t high_score = 0;
 
-    ThreadData(Board board, Move initial_move) : board(board), initial_move(initial_move) {}
+    ThreadData(Board board, std::vector<Move> initial_moves, Timer &timer) : board(board), initial_moves(initial_moves), timer(timer) {}
 };
 
 void thread_entry(ThreadData *data)
 {
-    data->board.apply_move(data->initial_move, Player::Player);
-    data->board.go(Player::Opponent, ++data->total_move_count);
-    data->board.undo_move(data->initial_move);
+    int32_t max_depth = 1;
+    while (!data->timer.has_elapsed())
+    {
+        for (auto &move : data->initial_moves)
+        {
+            data->board.apply_move(move, Player::Player);
+            auto new_score = data->board.search(Player::Opponent, data->total_move_count, max_depth, 0, data->timer);
+            if (new_score > data->high_score)
+            {
+                data->high_score = new_score;
+            }
+            data->board.undo_move(move);
+        }
+
+        ++max_depth;
+    }
+}
+
+std::vector<std::vector<Move>> divide_evenly(std::vector<Move> input, int32_t groups) {
+    std::vector<std::vector<Move>> result{};
+    auto items_per_group = input.size() / groups;
+    if (input.size() % groups != 0) {
+        ++items_per_group;
+    }
+
+    std::vector<Move> current_group{};
+    for (const auto& item : input) {
+        if (current_group.size() >= items_per_group) {
+            result.push_back(current_group);
+            current_group = std::vector<Move>();
+        }
+
+        current_group.push_back(item);
+    }
+
+    return result;
 }
 
 int main()
@@ -276,19 +392,22 @@ int main()
     std::vector<ThreadData *> threads_datas{};
     Board reference_board(ROWS, COLUMNS);
     auto initial_moves = reference_board.get_moves();
-    for (uint32_t i = 0; i < initial_moves.size(); ++i)
+    auto timer = Timer(5s);
+
+    for (auto move_group : divide_evenly(initial_moves, 1))
     {
-        auto data = new ThreadData(reference_board, initial_moves[i]);
-        threads_datas.push_back(data);
-        data->thread = std::thread(thread_entry, threads_datas[i]);
+        std::vector<Move> thread_moves(move_group.begin(), move_group.end());
+        auto thread_data = new ThreadData(reference_board, thread_moves, timer);
+        thread_data->thread = std::thread(thread_entry, thread_data);
+        threads_datas.push_back(thread_data);
     }
 
-    uint32_t total = 0;
-    for (uint32_t i = 0; i < initial_moves.size(); ++i)
+    int index = 0;
+    for (const auto &thread : threads_datas)
     {
-        threads_datas[i]->thread.join();
-        total += threads_datas[i]->total_move_count;
-    }
+        thread->thread.join();
 
-    std::cout << total << std::endl;
+        std::cout << std::format("Thread {} score: {}", index, thread->high_score) << std::endl;
+        std::cout << std::format("Thread {} moved search: {}", index++, thread->total_move_count) << std::endl;
+    }
 }
