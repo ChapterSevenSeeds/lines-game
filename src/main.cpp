@@ -1,6 +1,7 @@
 #include <iostream>
 #include <ranges>
 #include <unordered_set>
+#include <thread>
 #include <algorithm>
 #include <iostream>
 #include <format>
@@ -51,6 +52,14 @@ std::ostream &operator<<(std::ostream &os, const SideState &state)
     return os << (state == SideState::Opponent ? "Opponent" : state == SideState::Player ? "Player"
                                                                                          : "Empty");
 }
+
+enum class Side
+{
+    Top,
+    Left,
+    Right,
+    Bottom
+};
 
 struct Square
 {
@@ -132,50 +141,118 @@ std::ostream &operator<<(std::ostream &os, const Square &square)
     return os << "Top left: " << square.top_left_corner << square.top << "," << square.left << "," << square.right << "," << square.bottom;
 }
 
-void asdf(Board &board, Player turn, size_t &total_moves)
+struct Move
 {
+    Square &square;
+    Side side;
+
+    Move(Square &square, Side side) : square(square), side(side) {}
+
+    void apply_move(Player player)
+    {
+        switch (side)
+        {
+        case Side::Top:
+            square.set_top(player_to_side_state(player), true);
+            break;
+        case Side::Left:
+            square.set_left(player_to_side_state(player), true);
+            break;
+        case Side::Right:
+            square.set_right(player_to_side_state(player), true);
+            break;
+        case Side::Bottom:
+            square.set_bottom(player_to_side_state(player), true);
+            break;
+        }
+    }
+
+    void undo_move()
+    {
+        switch (side)
+        {
+        case Side::Top:
+            square.set_top(SideState::Empty, true);
+            break;
+        case Side::Left:
+            square.set_left(SideState::Empty, true);
+            break;
+        case Side::Right:
+            square.set_right(SideState::Empty, true);
+            break;
+        case Side::Bottom:
+            square.set_bottom(SideState::Empty, true);
+            break;
+        }
+    }
+};
+
+std::vector<Move> get_moves(Board &board)
+{
+    std::vector<Move> moves{};
     for (const auto row : std::views::iota(0, ROWS))
     {
         for (const auto column : std::views::iota(0, COLUMNS))
         {
-            auto& square = board[row][column];
-
-            if (square.is_full())
-                continue;
+            auto &square = board[row][column];
 
             if (square.top == SideState::Empty)
             {
-                square.set_top(player_to_side_state(turn), true);
-                asdf(board, opposite(turn), ++total_moves);
-                square.set_top(SideState::Empty, true);
+                moves.push_back(Move(square, Side::Top));
             }
 
             if (square.left == SideState::Empty)
             {
-                square.set_left(player_to_side_state(turn), true);
-                asdf(board, opposite(turn), ++total_moves);
-                square.set_left(SideState::Empty, true);
+                moves.push_back(Move(square, Side::Left));
             }
 
             if (square.right == SideState::Empty)
             {
-                square.set_right(player_to_side_state(turn), true);
-                asdf(board, opposite(turn), ++total_moves);
-                square.set_right(SideState::Empty, true);
+                moves.push_back(Move(square, Side::Right));
             }
 
             if (square.bottom == SideState::Empty)
             {
-                square.set_bottom(player_to_side_state(turn), true);
-                asdf(board, opposite(turn), ++total_moves);
-                square.set_bottom(SideState::Empty, true);
+                moves.push_back(Move(square, Side::Bottom));
             }
         }
     }
+
+    return moves;
 }
 
-int main()
+void go(Board &board, Player turn, size_t &total_moves)
 {
+    auto all_moves = get_moves(board);
+
+    for (auto &move : all_moves)
+    {
+        move.apply_move(turn);
+        go(board, opposite(turn), ++total_moves);
+        move.undo_move();
+    }
+}
+
+
+struct ThreadData
+{
+    Board board;
+    Move initial_move;
+    size_t total_move_count = 0;
+    std::thread thread;
+
+    ThreadData(Board &board, Move &initial_move) : board(board), initial_move(initial_move) {}
+};
+void thread_entry(ThreadData* data)
+{
+    data->initial_move.apply_move(Player::Player);
+    go(data->board, Player::Opponent, ++data->total_move_count);
+    data->initial_move.undo_move();
+}
+
+Board generate_board()
+{
+
     Board board{};
 
     for (const auto row : std::views::iota(0, ROWS))
@@ -213,7 +290,26 @@ int main()
         }
     }
 
-    size_t total_moves = 0;
-    asdf(board, Player::Player, total_moves);
-    std::cout << total_moves << std::endl;
+    return board;
+}
+
+int main()
+{
+    std::vector<ThreadData*> threads_datas{};
+    Board reference_board= generate_board();
+    auto move_count = get_moves(reference_board).size();
+    for (size_t i = 0; i < move_count; ++i)
+    {
+        Board board = generate_board();
+        auto moves = get_moves(board);
+        auto data = new ThreadData(board, moves[i]);
+        threads_datas.push_back(data);
+        data->thread = std::thread(thread_entry, threads_datas[i]);
+    }
+
+    size_t total = 0;
+    for (size_t i = 0; i < move_count; ++i) {
+        threads_datas[i]->thread.join();
+        total += threads_datas[i]->total_move_count;
+    }
 }

@@ -58,6 +58,9 @@
         "span": "cpp",
         "string": "cpp",
         "unordered_set": "cpp",
-        "xhash": "cpp"
+        "xhash": "cpp",
+        "thread": "cpp",
+        "ratio": "cpp",
+        "stop_token": "cpp"
     }
 }
