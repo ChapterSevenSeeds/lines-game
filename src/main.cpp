@@ -2,58 +2,12 @@
 #include <ranges>
 #include <unordered_set>
 #include <algorithm>
+#include <iostream>
+#include <format>
 #include "hash_combine.hpp"
 
-constexpr auto ROWS = 5;
-constexpr auto COLUMNS = 5;
-
-template <typename T, size_t Size>
-class OrderedTuple
-{
-    std::array<T, Size> items{};
-
-    void reset()
-    {
-        std::sort(items.begin(), items.end());
-    }
-
-public:
-    OrderedTuple() = default;
-
-    std::array<T, Size> get_items() const
-    {
-        return items;
-    }
-    T size() const
-    {
-        return Size;
-    }
-
-    T get(size_t index) const
-    {
-        return items[index];
-    }
-
-    void set(size_t index, T &item)
-    {
-        items[index] = item;
-        reset();
-    }
-};
-
-template <typename T, size_t Size>
-struct std::hash<OrderedTuple<T, Size>>
-{
-    std::size_t operator()(const OrderedTuple<T, Size> &s) const noexcept
-    {
-        size_t seed = 0;
-        for (const auto &item : s.get_items())
-        {
-            hash_combine(seed, s);
-        }
-        return seed;
-    }
-};
+constexpr auto ROWS = 2;
+constexpr auto COLUMNS = 2;
 
 struct Point
 {
@@ -62,198 +16,204 @@ struct Point
 
     Point(uint32_t row, uint32_t column) : row(row), column(column) {}
     Point() {}
-
-    bool operator==(const Point &other) const = default;
-    bool operator<(const Point &other) const
-    {
-        return row < other.row || (row == other.row && column < other.column);
-    }
-    bool operator<=(const Point &other) const
-    {
-        return *this < other || *this == other;
-    }
-    bool operator>(const Point &other) const
-    {
-        return !(*this <= other);
-    }
-    bool operator>=(const Point &other) const
-    {
-        return !(*this < other);
-    }
-    Point &operator=(const Point &other) = default;
 };
 
-template <>
-struct std::hash<Point>
+std::ostream &operator<<(std::ostream &os, const Point &point)
 {
-    std::size_t operator()(const Point &s) const noexcept
-    {
-        size_t seed = 0;
-        hash_combine(seed, s.row, s.column);
-        return seed;
-    }
-};
-
-bool can_form_line(Point point1, Point point2)
-{
-    auto column_diff = labs(point1.column - point2.column);
-    auto row_diff = labs(point1.row - point2.row);
-    return (column_diff == 1 && row_diff == 0) || (column_diff == 0 && row_diff == 1);
+    return os << std::format("({}, {})", point.row, point.column);
 }
 
-struct Line
+enum class SideState
 {
-    OrderedTuple<Point, 2> points{};
-
-    Line(Point point1, Point point2)
-    {
-        if (!can_form_line(point1, point2))
-        {
-            throw std::runtime_error("Nope");
-        }
-        points.set(0, point1);
-        points.set(1, point2);
-    }
-
-    Line() {}
-
-    bool operator==(const Line &other) const
-    {
-        return points.get(0) == other.points.get(0) && points.get(1) == other.points.get(1);
-    }
-
-    bool operator<(const Line &other) const
-    {
-        return points.get(0) < other.points.get(0) || (points.get(0) == other.points.get(0) && points.get(1) < other.points.get(1));
-    }
-    bool operator<=(const Line &other) const
-    {
-        return *this < other || *this == other;
-    }
-    bool operator>(const Line &other) const
-    {
-        return !(*this <= other);
-    }
-    bool operator>=(const Line &other) const
-    {
-        return !(*this < other);
-    }
+    Opponent,
+    Player,
+    Empty
 };
 
-template <>
-struct std::hash<Line>
+enum class Player
 {
-    std::size_t operator()(const Line &s) const noexcept
-    {
-        size_t seed = 0;
-        hash_combine(seed, s.points);
-        return seed;
-    }
+    Opponent,
+    Player
 };
+
+SideState player_to_side_state(Player player)
+{
+    return player == Player::Opponent ? SideState::Opponent : SideState::Player;
+}
+
+Player opposite(Player player)
+{
+    return player == Player::Opponent ? Player::Player : Player::Opponent;
+}
+
+std::ostream &operator<<(std::ostream &os, const SideState &state)
+{
+    return os << (state == SideState::Opponent ? "Opponent" : state == SideState::Player ? "Player"
+                                                                                         : "Empty");
+}
 
 struct Square
 {
-    // Top, left, right, bottom
-    OrderedTuple<Line, 4> lines{};
+    Point top_left_corner;
+    SideState top = SideState::Empty;
+    SideState left = SideState::Empty;
+    SideState right = SideState::Empty;
+    SideState bottom = SideState::Empty;
+    std::optional<Player> filled_by;
+    std::optional<std::reference_wrapper<Square>> top_neighbor;
+    std::optional<std::reference_wrapper<Square>> left_neighbor;
+    std::optional<std::reference_wrapper<Square>> right_neighbor;
+    std::optional<std::reference_wrapper<Square>> bottom_neighbor;
 
-    Square(Line line1, Line line2, Line line3, Line line4)
-    {
-        lines.set(0, line1);
-        lines.set(1, line2);
-        lines.set(2, line3);
-        lines.set(3, line4);
-    }
+    Square() {}
 
-    bool operator==(const Square &other) const
+    void fill(SideState &side, SideState state)
     {
-        for (auto i : std::views::iota(1, 4))
+        side = state;
+        if (top != SideState::Empty && left != SideState::Empty && right != SideState::Empty && bottom != SideState::Empty)
         {
-            if (lines.get(i) == other.lines.get(i))
-                continue;
-
-            return false;
+            filled_by = state == SideState::Player ? Player::Player : Player::Opponent;
         }
-
-        return true;
+        else
+        {
+            filled_by = std::nullopt;
+        }
     }
 
-    static bool possible(Line line1, Line line2, Line line3, Line line4)
+    void set_top(SideState player, bool update_neighbors)
     {
-        OrderedTuple<Line, 4> lines;
-        lines.set(0, line1);
-        lines.set(1, line2);
-        lines.set(2, line3);
-        lines.set(3, line4);
+        fill(top, player);
 
-        auto top = lines.get(0);
-        auto left = lines.get(1);
-        auto right = lines.get(2);
-        auto bottom = lines.get(3);
+        if (top_neighbor.has_value() && update_neighbors)
+        {
+            top_neighbor.value().get().set_bottom(player, false);
+        }
+    }
 
-        return top.points.get(0) == left.points.get(0) && top.points.get(1) == right.points.get(0) && left.points.get(1) == bottom.points.get(0) && right.points.get(1) == bottom.points.get(1);
+    void set_left(SideState player, bool update_neighbors)
+    {
+        fill(left, player);
+
+        if (left_neighbor.has_value() && update_neighbors)
+        {
+            left_neighbor.value().get().set_right(player, false);
+        }
+    }
+
+    void set_right(SideState player, bool update_neighbors)
+    {
+        fill(right, player);
+
+        if (right_neighbor.has_value() && update_neighbors)
+        {
+            right_neighbor.value().get().set_left(player, false);
+        }
+    }
+
+    void set_bottom(SideState player, bool update_neighbors)
+    {
+        fill(bottom, player);
+
+        if (bottom_neighbor.has_value() && update_neighbors)
+        {
+            bottom_neighbor.value().get().set_top(player, false);
+        }
+    }
+
+    bool is_full() const
+    {
+        return filled_by != std::nullopt && top != SideState::Empty && left != SideState::Empty && right != SideState::Empty && bottom != SideState::Empty;
     }
 };
+using Board = std::array<std::array<Square, COLUMNS>, ROWS>;
+
+std::ostream &operator<<(std::ostream &os, const Square &square)
+{
+    return os << "Top left: " << square.top_left_corner << square.top << "," << square.left << "," << square.right << "," << square.bottom;
+}
+
+void asdf(Board &board, Player turn, size_t &total_moves)
+{
+    for (const auto row : std::views::iota(0, ROWS))
+    {
+        for (const auto column : std::views::iota(0, COLUMNS))
+        {
+            auto& square = board[row][column];
+
+            if (square.is_full())
+                continue;
+
+            if (square.top == SideState::Empty)
+            {
+                square.set_top(player_to_side_state(turn), true);
+                asdf(board, opposite(turn), ++total_moves);
+                square.set_top(SideState::Empty, true);
+            }
+
+            if (square.left == SideState::Empty)
+            {
+                square.set_left(player_to_side_state(turn), true);
+                asdf(board, opposite(turn), ++total_moves);
+                square.set_left(SideState::Empty, true);
+            }
+
+            if (square.right == SideState::Empty)
+            {
+                square.set_right(player_to_side_state(turn), true);
+                asdf(board, opposite(turn), ++total_moves);
+                square.set_right(SideState::Empty, true);
+            }
+
+            if (square.bottom == SideState::Empty)
+            {
+                square.set_bottom(player_to_side_state(turn), true);
+                asdf(board, opposite(turn), ++total_moves);
+                square.set_bottom(SideState::Empty, true);
+            }
+        }
+    }
+}
 
 int main()
 {
-    std::unordered_set<Line> all_lines{};
-    for (const auto row1 : std::views::iota(1, ROWS))
+    Board board{};
+
+    for (const auto row : std::views::iota(0, ROWS))
     {
-        for (const auto column1 : std::views::iota(1, COLUMNS))
+        for (const auto column : std::views::iota(0, COLUMNS))
         {
-            const Point point1(row1, column1);
+            board[row][column] = Square();
+            board[row][column].top_left_corner = Point(row, column);
+        }
+    }
 
-            for (const auto row2 : std::views::iota(1, ROWS))
+    for (const auto row : std::views::iota(0, ROWS))
+    {
+        for (const auto column : std::views::iota(0, COLUMNS))
+        {
+            if (row > 0)
             {
-                for (const auto column2 : std::views::iota(1, COLUMNS))
-                {
-                    const Point point2(row2, column2);
+                board[row][column].top_neighbor = board[row - 1][column];
+            }
 
-                    if (can_form_line(point1, point2))
-                    {
-                        all_lines.insert(Line(point1, point2));
-                    }
-                }
+            if (column > 0)
+            {
+                board[row][column].left_neighbor = board[row][column - 1];
+            }
+
+            if (column < COLUMNS - 1)
+            {
+                board[row][column].right_neighbor = board[row][column + 1];
+            }
+
+            if (row < ROWS - 1)
+            {
+                board[row][column].bottom_neighbor = board[row + 1][column];
             }
         }
     }
 
-    std::unordered_set<Square> all_squares{};
-    for (const auto &line1 : all_lines)
-    {
-        for (const auto &line2 : all_lines)
-        {
-            for (const auto &line3 : all_lines)
-            {
-                for (const auto &line4 : all_lines)
-                {
-                    if (Square::possible(line1, line2, line3, line4))
-                    {
-                        all_squares.insert(Square(line1, line2, line3, line4));
-                    }
-                }
-            }
-        }
-    }
-
-    for (const auto &square : all_squares)
-    {
-        std::cout << std::format("({},{}, {},{}) - ({},{}, {},{}) - ({},{}, {},{}) - ({},{}, {},{})",
-                                 square.lines.get(0).points.get(0).row,
-                                 square.lines.get(0).points.get(0).column,
-                                 square.lines.get(0).points.get(1).row,
-                                 square.lines.get(0).points.get(1).column,
-                                 square.lines.get(1).points.get(0).row,
-                                 square.lines.get(1).points.get(0).column,
-                                 square.lines.get(1).points.get(1).row,
-                                 square.lines.get(1).points.get(1).column,
-                                 square.lines.get(2).points.get(0).row,
-                                 square.lines.get(2).points.get(0).column,
-                                 square.lines.get(2).points.get(1).row,
-                                 square.lines.get(2).points.get(1).column,
-                                 square.lines.get(3).points.get(0).row,
-                                 square.lines.get(3).points.get(0).column,
-                                 square.lines.get(3).points.get(1).row,
-                                 square.lines.get(3).points.get(1).column);
-    }
+    size_t total_moves = 0;
+    asdf(board, Player::Player, total_moves);
+    std::cout << total_moves << std::endl;
 }

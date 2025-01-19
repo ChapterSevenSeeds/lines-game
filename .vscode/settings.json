@@ -51,6 +51,13 @@
         "xutility": "cpp",
         "algorithm": "cpp",
         "array": "cpp",
-        "vector": "cpp"
+        "vector": "cpp",
+        "ranges": "cpp",
+        "list": "cpp",
+        "optional": "cpp",
+        "span": "cpp",
+        "string": "cpp",
+        "unordered_set": "cpp",
+        "xhash": "cpp"
     }
 }
